@@ -132,11 +132,16 @@
 #define SQF_SECURITY_SETTINGS		0x10000000
 #define SQF_OPTIONAL_WADS			0x20000000
 #define SQF_DEH						0x40000000
+#define SQF_EXTENDED_INFO			0x80000000
+
+#define SQF2_PWAD_HASHES			0x00000001
 
 #define	SQF_ALL						( SQF_NAME|SQF_URL|SQF_EMAIL|SQF_MAPNAME|SQF_MAXCLIENTS|SQF_MAXPLAYERS| \
 									  SQF_PWADS|SQF_GAMETYPE|SQF_GAMENAME|SQF_IWAD|SQF_FORCEPASSWORD|SQF_FORCEJOINPASSWORD|SQF_GAMESKILL| \
 									  SQF_BOTSKILL|SQF_DMFLAGS|SQF_LIMITS|SQF_TEAMDAMAGE|SQF_TEAMSCORES|SQF_NUMPLAYERS|SQF_PLAYERDATA|SQF_TEAMINFO_NUMBER|SQF_TEAMINFO_NAME|SQF_TEAMINFO_COLOR|SQF_TEAMINFO_SCORE| \
-									  SQF_TESTING_SERVER|SQF_DATA_MD5SUM|SQF_ALL_DMFLAGS|SQF_SECURITY_SETTINGS|SQF_OPTIONAL_WADS|SQF_DEH )
+									  SQF_TESTING_SERVER|SQF_DATA_MD5SUM|SQF_ALL_DMFLAGS|SQF_SECURITY_SETTINGS|SQF_OPTIONAL_WADS|SQF_DEH|SQF_EXTENDED_INFO )
+
+#define SQF2_ALL					( SQF2_PWAD_HASHES )
 
 #define	MAX_STORED_QUERY_IPS		512
 
@@ -209,6 +214,37 @@ public:
 	{
 		return false;
 	}
+
+	virtual int getClientTic ( ) const
+	{ 
+		return 0;
+	}
+};
+
+//*****************************************************************************
+class ClientCommandRegulator
+{
+	static const int TimeoutTics = 5 * TICRATE;
+
+	int SafeLatency = 0;
+	int BaseTic = 0;
+
+	struct CMDGap
+	{
+		int Tics;
+		int Count;
+		int Gametic;
+	};
+	TArray<CMDGap> Gaps;
+	TArray<ClientCommand *> MoveCMDs;
+
+	void processGap( int tics );
+
+public:
+	template<typename CommandType> bool parseBufferedCommand( BYTESTREAM_s *pByteStream );
+	void reset( );
+	void tick( );
+	void move( int client );
 };
 
 //*****************************************************************************
@@ -291,6 +327,9 @@ struct CLIENT_s
 	// Last tick we received a movement command.
 	LONG			lLastMoveTick;
 
+	// Last tick we processed a movement command.
+	LONG			lLastMoveTickProcess;
+
 	// We keep track of how many extra movement commands we get from the client. If it
 	// exceeds a certain level over time, we kick him.
 	LONG			lOverMovementLevel;
@@ -319,8 +358,8 @@ struct CLIENT_s
 	// [K6] Last tic we got some action from the client. Used to determine his presence.
 	LONG			lLastActionTic;
 
-	// [BB] Buffer storing all movement commands received from the client we haven't executed yet.
-	TArray<ClientCommand*>	MoveCMDs;
+	// To keep the movement smooth even for lagging players.
+	ClientCommandRegulator	MoveCMDRegulator;
 
 	// [BB] Variables for the account system
 	FString username;
@@ -480,7 +519,7 @@ void		SERVER_MASTER_Construct( void );
 void		SERVER_MASTER_Destruct( void );
 void		SERVER_MASTER_Tick( void );
 void		SERVER_MASTER_Broadcast( void );
-void		SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ulTime, bool bBroadcasting );
+void		SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ulTime, ULONG ulFlags2, bool bBroadcasting );
 const char	*SERVER_MASTER_GetGameName( void );
 NETADDRESS_s SERVER_MASTER_GetMasterAddress( void );
 void		SERVER_MASTER_HandleVerificationRequest( BYTESTREAM_s *pByteStream );

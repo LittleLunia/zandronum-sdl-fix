@@ -311,6 +311,26 @@ void P_Ticker (void)
 		}
 	}
 
+	// [Leo] The player ticking process for the server is now "linear" because we must call P_PlayerThink for
+	// everyone before ticking (and therefore moving) the mobjs so that clients can get a chance to hit someone.
+	// [BB] Process up to two movement commands for each client.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+	{
+		for ( int i = 0; i < ( ( gametic % 3 == 0 ) ? 2 : 1 ); i++ )
+		{
+			for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
+			{
+				if ( SERVER_IsValidClient( ulIdx ) == false )
+					continue;
+
+				if ( i == 0 )
+					SERVER_GetClient( ulIdx )->MoveCMDRegulator.tick( );
+				
+				SERVER_GetClient( ulIdx )->MoveCMDRegulator.move( ulIdx );
+			}
+		}
+	}
+
 	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
 	{
 		// Increment individual player time.
@@ -335,7 +355,7 @@ void P_Ticker (void)
 			}
 		}
 
-		// Client's "think" every time we get a cmd.
+		// Clients "think" every time we process a movement command.
 		// [BB] The server has to think for lagging clients, otherwise they aren't affected by things like sector damage.
 		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( players[ulIdx].bIsBot == false ) && ( players[ulIdx].bLagging == false ) )
 			continue;

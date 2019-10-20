@@ -59,6 +59,14 @@
 #include "g_level.h"
 #include "p_acs.h"
 #include "cl_demo.h"
+#include "c_bind.h"
+#include "d_event.h"
+#include "gi.h"
+#include "v_palette.h"
+#include "v_video.h"
+#include "menu/menu.h"
+#define NO_IMP
+#include "menu/optionmenuitems.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -68,7 +76,7 @@ class DWaitingCommand : public DThinker
 {
 	DECLARE_CLASS (DWaitingCommand, DThinker)
 public:
-	DWaitingCommand (const char *cmd, int tics);
+	DWaitingCommand (const char *cmd, int tics, bool unsafe);
 	~DWaitingCommand ();
 	void Serialize (FArchive &arc);
 	void Tick ();
@@ -78,6 +86,7 @@ private:
 
 	char *Command;
 	int TicsLeft;
+	bool IsUnsafe;
 };
 
 class DStoredCommand : public DThinker
@@ -137,7 +146,24 @@ FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
 	Button_ShowMedals;	// [BC] Added the "show medals" button.
 
 
-bool ParsingKeyConf;
+bool ParsingKeyConf, UnsafeExecutionContext;
+
+class UnsafeExecutionScope
+{
+	const bool wasEnabled;
+
+public:
+	explicit UnsafeExecutionScope(const bool enable = true)
+	: wasEnabled(UnsafeExecutionContext)
+	{
+		UnsafeExecutionContext = enable;
+	}
+
+	~UnsafeExecutionScope()
+	{
+		UnsafeExecutionContext = wasEnabled;
+	}
+};
 
 // To add new actions, go to the console and type "key <action name>".
 // This will give you the key value to use in the first column. Then
@@ -206,19 +232,21 @@ IMPLEMENT_CLASS (DWaitingCommand)
 void DWaitingCommand::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << Command << TicsLeft;
+	arc << Command << TicsLeft << IsUnsafe;
 }
 
 DWaitingCommand::DWaitingCommand ()
 {
 	Command = NULL;
 	TicsLeft = 1;
+	IsUnsafe = false;
 }
 
-DWaitingCommand::DWaitingCommand (const char *cmd, int tics)
+DWaitingCommand::DWaitingCommand (const char *cmd, int tics, bool unsafe)
 {
 	Command = copystring (cmd);
 	TicsLeft = tics+1;
+	IsUnsafe = unsafe;
 }
 
 DWaitingCommand::~DWaitingCommand ()
@@ -233,6 +261,7 @@ void DWaitingCommand::Tick ()
 {
 	if (--TicsLeft == 0)
 	{
+		UnsafeExecutionScope scope;
 		AddCommandString (Command);
 		Destroy ();
 	}
@@ -710,6 +739,15 @@ void C_DoCommand (const char *cmd, int keynum)
 	}
 }
 
+// [BB] Moved here from optionmenuitems.h
+bool FOptionMenuItemCommand::Activate()
+{
+	S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", snd_menuvolume, ATTN_NONE);
+	UnsafeExecutionScope scope(mUnsafe);
+	C_DoCommand(mAction);
+	return true;
+}
+
 void AddCommandString (char *cmd, int keynum)
 {
 	char *brkpt;
@@ -768,7 +806,7 @@ void AddCommandString (char *cmd, int keynum)
 						  // Note that deferred commands lose track of which key
 						  // (if any) they were pressed from.
 							*brkpt = ';';
-							new DWaitingCommand (brkpt, tics+1);
+							new DWaitingCommand (brkpt, tics+1, UnsafeExecutionContext);
 						}
 						return;
 					}
@@ -1082,6 +1120,17 @@ void FConsoleCommand::Run (FCommandLine &argv, APlayerPawn *who, int key)
 	m_RunFunc (argv, who, key);
 }
 
+void FUnsafeConsoleCommand::Run (FCommandLine &args, APlayerPawn *instigator, int key)
+{
+	if (UnsafeExecutionContext)
+	{
+		Printf(TEXTCOLOR_RED "Cannot execute unsafe command " TEXTCOLOR_GOLD "%s\n", m_Name);
+		return;
+	}
+
+	FConsoleCommand::Run (args, instigator, key);
+}
+
 FConsoleAlias::FConsoleAlias (const char *name, const char *command, bool noSave)
 	: FConsoleCommand (name, NULL),
 	  bRunning(false), bKill(false)
@@ -1376,9 +1425,13 @@ CCMD (alias)
 					alias = NULL;
 				}
 			}
+			else if (ParsingKeyConf)
+			{
+				new FUnsafeConsoleAlias (argv[1], argv[2]);
+			}
 			else
 			{
-				alias = new FConsoleAlias (argv[1], argv[2], ParsingKeyConf);
+				alias = new FConsoleAlias (argv[1], argv[2], false);
 			}
 		}
 	}
@@ -1514,6 +1567,12 @@ void FConsoleAlias::SafeDelete ()
 	{
 		bKill = true;
 	}
+}
+
+void FUnsafeConsoleAlias::Run (FCommandLine &args, APlayerPawn *instigator, int key)
+{
+	UnsafeExecutionScope scope;
+	FConsoleAlias::Run(args, instigator, key);
 }
 
 void FExecList::AddCommand(const char *cmd, const char *file)

@@ -237,9 +237,6 @@ CUSTOM_CVAR (Int, con_notifylines, 4, CVAR_ARCHIVE)
 
 static int NotifyTop, NotifyTopGoal;
 
-// [BC] Should we allow color codes?
-static	bool	g_bAllowColorCodes = true;
-
 // [BC] Is there a player executing a remote control command? If so, display messages that
 // are printed in the console as a result of his actions to him as well.
 static	ULONG	g_ulRCONPlayer = MAXPLAYERS;
@@ -256,7 +253,7 @@ FILE *Logfile = NULL;
 char g_szDesiredLogFilename[256];
 
 // [RC] The actual name of the logfile (most likely g_szLogFilename with a timestamp).
-char g_szActualLogFilename[256];
+char g_szActualLogFilename[512];
 
 void C_AddNotifyString (int printlevel, const char *source);
 
@@ -488,7 +485,7 @@ void C_InitConsole (int width, int height, bool ingame)
 //
 //==========================================================================
 
-CCMD (atexit)
+UNSAFE_CCMD (atexit)
 {
 	if (argv.argc() == 1)
 	{
@@ -686,13 +683,6 @@ void C_AddNotifyString (int printlevel, const char *source)
 	}
 
 	NotifyTopGoal = 0;
-}
-
-//*****************************************************************************
-//
-void CONSOLE_SetAllowColorCodes( bool bAllow )
-{
-	g_bAllowColorCodes = bAllow;
 }
 
 //*****************************************************************************
@@ -973,8 +963,9 @@ int PrintString (int printlevel, const char *outline)
 		strcpy (copy,outlinecopy);
 */
 		FString copy = outlinecopy;
-		V_ColorizeString( copy );
 		V_RemoveColorCodes( copy );
+
+		static bool needPrependedTimestamp = true;
 
 		if( sv_logfiletimestamp )
 		{
@@ -1001,12 +992,11 @@ int PrintString (int printlevel, const char *outline)
 			}
 
 			// [TP] If the previous call ended on a newline, we add one at the beginning of the string too.
-			static bool needPrependedTimestamp = true;
 			if ( needPrependedTimestamp )
 				copy.Insert( 0, time );
-
-			needPrependedTimestamp = ( copy[copy.Len() - 1] == '\n' );
 		}
+
+		needPrependedTimestamp = (copy[copy.Len() - 1] == '\n');
 
 		fputs (copy, Logfile);
 		// [TP] copy is now an FString.
@@ -1038,9 +1028,6 @@ int PrintString (int printlevel, const char *outline)
 	// [RC] Send this to the G15 LCD, if enabled.
 	if ( G15_IsReady() )
 		G15_Printf( outlinecopy );
-
-	if ( g_bAllowColorCodes )
-		V_ColorizeString( outlinecopy );
 
 	// User wishes to remove color from all messages.
 	if ( con_colorinmessages == 0 )

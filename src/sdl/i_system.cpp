@@ -27,6 +27,11 @@
 #include <fnmatch.h>
 #include <unistd.h>
 
+// [EP] Compiling hack for OSX, purge this after code upgrade.
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -182,8 +187,14 @@ int I_GetTimePolled (bool saveMS)
 
 	if (saveMS)
 	{
+		// [Leo] Replaced the expressions for TicStart and TicNext below.
+		/*
 		TicStart = tm;
 		TicNext = Scale((Scale (tm, TICRATE, 1000) + 1), 1000, TICRATE);
+		*/
+		DWORD CurrentTic = ((tm - BaseTime) * TICRATE) / 1000;
+		TicStart = (CurrentTic * 1000 / TICRATE) + BaseTime;
+		TicNext = ((CurrentTic + 1) * 1000 / TICRATE) + BaseTime;
 	}
 	return Scale(tm - BaseTime, TICRATE, 1000);
 }
@@ -289,8 +300,7 @@ void I_SelectTimer()
 	itv.it_interval.tv_sec = itv.it_value.tv_sec = 0;
 	itv.it_interval.tv_usec = itv.it_value.tv_usec = 1000000/TICRATE;
 
-	// [BB] For now I_WaitForTicSignaled doesn't work on the client.
-	if ( NETWORK_InClientMode() || ( setitimer(ITIMER_REAL, &itv, NULL) != 0 ) )
+	if (setitimer(ITIMER_REAL, &itv, NULL) != 0)
 	{
 		I_GetTime = I_GetTimePolled;
 		I_FreezeTime = I_FreezeTimePolled;

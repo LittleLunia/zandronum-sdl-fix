@@ -16,10 +16,11 @@ ccdv
 debugobj
 server-releaseobj
 server-debugobj
-fmodapi*linux
+fmodapi*linux*
 *.kdev4
 .kdev4
 __pycache__
+.vscode
 CMakeLists.txt.user.*
 
 # /getwad/

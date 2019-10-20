@@ -137,8 +137,8 @@ bool client_RetrieveCredentials ( const FString &Username, FString &Password )
 void client_RequestLogin ( const char* Username, const char* Password )
 {
 	g_password = Password;
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SRP_USER_REQUEST_LOGIN );
-	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, Username );
+	CLIENT_GetLocalBuffer( )->ByteStream.WriteByte( CLC_SRP_USER_REQUEST_LOGIN );
+	CLIENT_GetLocalBuffer( )->ByteStream.WriteString( Username );
 }
 
 //*****************************************************************************
@@ -156,10 +156,10 @@ void client_SRPStartAuthentication ( const char *Username )
 	if ( strcmp( authUsername, Username ) != 0 )
 		Printf ( "Username problem when calling srp_user_start_authentication.\n" );
 
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SRP_USER_START_AUTHENTICATION );
-	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, lenA );
+	CLIENT_GetLocalBuffer( )->ByteStream.WriteByte( CLC_SRP_USER_START_AUTHENTICATION );
+	CLIENT_GetLocalBuffer( )->ByteStream.WriteShort( lenA );
 	for ( int i = 0; i < lenA; ++i )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, bytesA[i] );
+		CLIENT_GetLocalBuffer( )->ByteStream.WriteByte( bytesA[i] );
 }
 
 //*****************************************************************************
@@ -174,10 +174,10 @@ void client_SRPUserProcessChallenge ( TArray<unsigned char> &Salt, TArray<unsign
 		Printf ( "User SRP-6a safety check violation!\n" );
 	else
 	{
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SRP_USER_PROCESS_CHALLENGE );
-		NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, lenM );
+		CLIENT_GetLocalBuffer( )->ByteStream.WriteByte( CLC_SRP_USER_PROCESS_CHALLENGE );
+		CLIENT_GetLocalBuffer( )->ByteStream.WriteShort( lenM );
 		for ( int i = 0; i < lenM; ++i )
-			NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, bytesM[i] );
+			CLIENT_GetLocalBuffer( )->ByteStream.WriteByte( bytesM[i] );
 	}
 }
 
@@ -189,29 +189,29 @@ void CLIENT_ProcessSRPServerCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 	{
 	case SVC2_SRP_USER_START_AUTHENTICATION:
 		{
-			const FString username = NETWORK_ReadString( pByteStream );
+			const FString username = pByteStream->ReadString();
 			client_SRPStartAuthentication ( username.GetChars() );
 		}
 		break;
 	case SVC2_SRP_USER_PROCESS_CHALLENGE:
 		{
-			const int lenSalt = NETWORK_ReadByte( pByteStream );
+			const int lenSalt = pByteStream->ReadByte();
 			TArray<unsigned char> salt;
 			salt.Resize ( lenSalt ); 
 			for ( int i = 0; i < lenSalt; ++i )
-				salt[i] = NETWORK_ReadByte( pByteStream );
-			const int lenB = NETWORK_ReadShort( pByteStream );
+				salt[i] = pByteStream->ReadByte();
+			const int lenB = pByteStream->ReadShort();
 			TArray<unsigned char> bytesB;
 			bytesB.Resize ( lenB ); 
 			for ( int i = 0; i < lenB; ++i )
-				bytesB[i] = NETWORK_ReadByte( pByteStream );
+				bytesB[i] = pByteStream->ReadByte();
 
 			client_SRPUserProcessChallenge ( salt, bytesB );
 		}
 		break;
 	case SVC2_SRP_USER_VERIFY_SESSION:
 		{
-			const int lenHAMK = NETWORK_ReadShort( pByteStream );
+			const int lenHAMK = pByteStream->ReadShort();
 
 			// [BB] The following crashes if g_usr is not properly initialized.
 			if ( g_usr == NULL )
@@ -221,7 +221,7 @@ void CLIENT_ProcessSRPServerCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 			// [BB] We may need to allocate more then lenHAMK!
 			bytesHAMK.Resize ( srp_user_get_session_key_length( g_usr ) ); 
 			for ( int i = 0; i < lenHAMK; ++i )
-				bytesHAMK[i] = NETWORK_ReadByte( pByteStream );
+				bytesHAMK[i] = pByteStream->ReadByte();
 
 			srp_user_verify_session( g_usr, &(bytesHAMK[0]) );
 

@@ -240,7 +240,7 @@ CCMD (map)
 //
 //==========================================================================
 
-CCMD (open)
+UNSAFE_CCMD (open)
 {
 	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
 		( NETWORK_GetState( ) == NETSTATE_SERVER ))
@@ -310,6 +310,9 @@ void G_NewInit ()
 
 	// [BC] Potentially need to reset userinfo if we left a server.
 	D_SetupUserInfo( );
+
+	// [Leo] This used to reset when re-constructing player_t.
+	CLIENT_PREDICT_Construct();
 
 	NextSkill = -1;
 

@@ -64,6 +64,9 @@
 #include "p_acs.h"
 #include "version.h"
 #include "menu/menu.h"
+#include "cl_main.h"
+#include "cl_commands.h"
+#include "v_text.h"
 
 struct FLatchedValue
 {
@@ -197,6 +200,15 @@ void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
 			latch.Value.String = copystring(value.String);
 		LatchedValues.Push (latch);
 	}
+	// [TP] If we have RCON access, tell the server to set this value.
+	else if ( NETWORK_GetState() == NETSTATE_CLIENT
+		&& CLIENT_HasRCONAccess()
+		&& ( Flags & ( CVAR_SERVERINFO | CVAR_SENSITIVESERVERSETTING )))
+	{
+		// [TP] Note that we do not set the CVar here. The server will tell us when it's changed.
+		// If we set it by ourselves and this packet gets lost, the CVar value desyncs.
+		CLIENTCOMMANDS_RCONSetCVar( Name, ToString( value, type ));
+	}
 	// [BC] Support for client-side demos.
 	else if ((Flags & CVAR_SERVERINFO) && gamestate != GS_STARTUP && !demoplayback && ( CLIENTDEMO_IsPlaying( ) == false ))
 	{
@@ -213,6 +225,10 @@ void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
 	{
 		ForceSet (value, type);
 	}
+
+	// [TP] Inform RCON clients about server setting changes
+	if ( NETWORK_GetState() == NETSTATE_SERVER && ( Flags & ( CVAR_SENSITIVESERVERSETTING | CVAR_SERVERINFO )))
+		SERVERCOMMANDS_SyncCVarToAdmins( *this );
 }
 
 bool FBaseCVar::ToBool (UCVarValue value, ECVarType type)
@@ -660,15 +676,15 @@ void FBaseCVar::DisableCallbacks ()
 }
 
 // [TP]
-bool FBaseCVar::IsServerInfo()
+bool FBaseCVar::IsServerCVar()
 {
 	if ( IsFlagCVar() )
-		return static_cast<FFlagCVar*>( this )->GetValueVar()->IsServerInfo();
+		return static_cast<FFlagCVar*>( this )->GetValueVar()->IsServerCVar();
 
 	if ( IsMaskCVar() )
-		return static_cast<FMaskCVar*>( this )->GetValueVar()->IsServerInfo();
+		return static_cast<FMaskCVar*>( this )->GetValueVar()->IsServerCVar();
 
-	return !!( Flags & CVAR_SERVERINFO );
+	return !!( Flags & ( CVAR_SERVERINFO | CVAR_SENSITIVESERVERSETTING ));
 }
 
 //
@@ -1278,7 +1294,8 @@ void FMaskCVar::DoSet (UCVarValue value, ECVarType type)
 	if ((ValueVar.GetFlags() & CVAR_SERVERINFO) && gamestate != GS_STARTUP && !demoplayback)
 	{
 		// [BB] netgame && !players[consoleplayer].settings_controller -> NETWORK_InClientMode( )
-		if ( NETWORK_InClientMode( ) )
+		// [TP] Let RCON clients set this CVar.
+		if ( NETWORK_InClientMode() && ( CLIENT_HasRCONAccess() == false ) )
 		{
 			Printf ("Only setting controllers can change %s\n", Name);
 			return;
@@ -1602,8 +1619,23 @@ FBaseCVar* C_GetRootCVar()
 	return CVars;
 }
 
+static bool IsUnsafe(const FBaseCVar *const var)
+{
+	const bool unsafe = UnsafeExecutionContext && !(var->GetFlags() & CVAR_MOD);
+	if (unsafe)
+	{
+		Printf(TEXTCOLOR_RED "Cannot set console variable" TEXTCOLOR_GOLD " %s " TEXTCOLOR_RED "from unsafe command\n", var->GetName());
+	}
+	return unsafe;
+}
+
 void FBaseCVar::CmdSet (const char *newval)
 {
+	if (IsUnsafe(this))
+	{
+		return;
+	}
+
 	UCVarValue val;
 
 	// Casting away the const is safe in this case.
@@ -1689,6 +1721,11 @@ CCMD (toggle)
 	{
 		if ( (var = FindCVar (argv[1], &prev)) )
 		{
+			if (IsUnsafe(var))
+			{
+				return;
+			}
+
 			val = var->GetGenericRep (CVAR_Bool);
 			val.Bool = !val.Bool;
 			var->SetGenericRep (val, CVAR_Bool);

@@ -171,50 +171,137 @@ enum
 // This is the longest possible string we can pass over the network.
 #define	MAX_NETWORK_STRING			2048
 
-//*****************************************************************************
-// [BB] Allows to easily use char[4][4] references as function arguments.
-typedef char IPStringArray[4][4];
-
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- STRUCTURES ------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 
+struct NETADDRESS_s;
+struct BYTESTREAM_s;
+
+//==========================================================================
+//
+// IPStringArray
+//
+// @author Benjamin Berkels
+//
+//==========================================================================
+
+class IPStringArray
+{
+private:
+	char szAddress[4][4];
+
+	const char* operator[] ( int i ) const
+	{
+		return szAddress[i];
+	}
+public:
+
+	void Clear()
+	{
+		for ( int i = 0; i < 4; ++i )
+			szAddress[i][0] = 0;
+	}
+
+	void SetToZeroes ( )
+	{
+		for ( int i = 0; i < 4; ++i )
+			sprintf( szAddress[i], "0" );
+	}
+
+	void SetFrom ( const NETADDRESS_s &Address );
+
+	bool SetFromString ( const char *pszAddressString );
+
+	bool IsEqualTo ( const IPStringArray& other ) const
+	{
+		for ( int i = 0; i < 4; ++i )
+		{
+			if ( stricmp ( szAddress[i], other[i] ) != 0 )
+				return false;
+		}
+		return true;
+	}
+
+	int CompareForSort ( const IPStringArray& other )
+	{
+		for ( int i = 0; i < 4; ++i )
+		{
+			if ( atoi( szAddress[i] ) != atoi( other[i] ) )
+				return ( atoi( szAddress[i] ) < atoi ( other[i] ) ) ? -1 : 1;
+		}
+		return 0;
+	}
+
+	bool Matches ( const IPStringArray& otherWithWildcards ) const
+	{
+		for ( int i = 0; i < 4; ++i )
+		{
+			if (( otherWithWildcards[i][0] != '*' ) && ( stricmp( szAddress[i], otherWithWildcards[i] ) != 0 ) )
+				return false;
+		}
+		return true;
+	}
+
+	void copyFrom ( const IPStringArray& other )
+	{
+		for (int i = 0; i < 4; ++i)
+			sprintf ( szAddress[i], "%s", other[i] );
+	}
+
+	std::ostream& print ( std::ostream& os ) const
+	{
+		return os << szAddress[0] << "." << szAddress[1] << "." << szAddress[2] << "." << szAddress[3];
+	}
+
+	operator std::string () const
+	{
+		std::string stringRepresentation;
+		stringRepresentation = stringRepresentation + szAddress[0] + "." + szAddress[1] + "." + szAddress[2] + "." + szAddress[3];
+		return stringRepresentation;
+	}
+};
+
+extern std::ostream &operator<< ( std::ostream &os, const IPStringArray &input );
+
 //*****************************************************************************
 struct NETADDRESS_s
 {
+public:
 	// Four digit IP address.
 	BYTE		abIP[4];
 
 	// The IP address's port extension.
 	USHORT		usPort;
 
-	// What's this for?
-	USHORT		usPad;
-
 	NETADDRESS_s();
 	explicit NETADDRESS_s ( const char* string, bool* ok = NULL );
 
+	void Clear ();
 	bool Compare ( const NETADDRESS_s& other, bool ignorePort = false ) const;
 	bool CompareNoPort ( const NETADDRESS_s& other ) const { return Compare( other, true ); }
-	const char* ToHostName() const;
-	void ToIPStringArray ( IPStringArray& address ) const;
-	struct sockaddr_in ToSocketAddress() const;
+	void ToSocketAddress( struct sockaddr &SocketAddress ) const;
 	void SetPort ( USHORT port );
 	const char* ToString() const;
 	const char* ToStringNoPort() const;
 	bool LoadFromString( const char* string );
-	void LoadFromSocketAddress ( const struct sockaddr_in& sockaddr );
+	void LoadFromSocketAddress ( const struct sockaddr& sockaddr );
+	bool IsSet () const;
+	void WriteToStream ( BYTESTREAM_s *pByteStream, bool IncludePort = true ) const;
+	void ReadFromStream ( BYTESTREAM_s *pByteStream, bool IncludePort = true );
 
 private:
 	bool operator==( const NETADDRESS_s& );
 	bool operator!=( const NETADDRESS_s& );
+
+	friend class IPStringArray;
 };
 
 //*****************************************************************************
 struct IPADDRESSBAN_s
 {
 	// The IP address in char form (can be a number or a wildcard).
-	char		szIP[4][4];
+	IPStringArray szIP;
 
 	// Comment regarding the banned address.
 	char		szComment[128];
@@ -229,6 +316,28 @@ struct BYTESTREAM_s
 {
 	BYTESTREAM_s();
 	void EnsureBitSpace( int bits, bool writing );
+
+	int	ReadByte();
+	int ReadShort();
+	int	ReadLong();
+	float ReadFloat();
+	const char* ReadString();
+	bool ReadBit();
+	int ReadVariable();
+	int ReadShortByte( int bits );
+	void ReadBuffer( void* buffer, size_t length );
+
+	void WriteByte( int Byte );
+	void WriteShort( int Short );
+	void WriteLong( int Long );
+	void WriteFloat( float Float );
+	void WriteString( const char *pszString );
+	void WriteBit( bool bit );
+	void WriteVariable( int value );
+	void WriteShortByte( int value, int bits );
+	void WriteBuffer( const void *pvBuffer, int nLength );
+
+	void WriteHeader( int Byte );
 
 	// Pointer to our stream of data.
 	BYTE		*pbStream;
@@ -247,6 +356,7 @@ struct BYTESTREAM_s
 	// [RC] Whether or not we've logged this.
 	bool		bPacketAlreadyLogged;
 #endif
+	void AdvancePointer( const int NumBytes, const bool OutboundTraffic );
 };
 
 
@@ -283,30 +393,8 @@ struct NETBUFFER_s
 //-- PROTOTYPES ------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 
-void			NETWORK_WriteBuffer( BYTESTREAM_s *pByteStream, const void *pvBuffer, int nLength );
-
 void			NETWORK_StartTrafficMeasurement ( );
 int				NETWORK_StopTrafficMeasurement ( );
-
-int				NETWORK_ReadByte( BYTESTREAM_s *pByteStream );
-int				NETWORK_ReadShort( BYTESTREAM_s *pByteStream );
-int				NETWORK_ReadLong( BYTESTREAM_s *pByteStream );
-float			NETWORK_ReadFloat( BYTESTREAM_s *pByteStream );
-const char		*NETWORK_ReadString( BYTESTREAM_s *pByteStream );
-bool			NETWORK_ReadBit( BYTESTREAM_s *byteStream );
-int				NETWORK_ReadVariable( BYTESTREAM_s *byteStream );
-int				NETWORK_ReadShortByte ( BYTESTREAM_s* byteStream, int bits );
-void			NETWORK_WriteByte( BYTESTREAM_s *pByteStream, int Byte );
-void			NETWORK_WriteShort( BYTESTREAM_s *pByteStream, int Short );
-void			NETWORK_WriteLong( BYTESTREAM_s *pByteStream, int Long );
-void			NETWORK_WriteFloat( BYTESTREAM_s *pByteStream, float Float );
-void			NETWORK_WriteString( BYTESTREAM_s *pByteStream, const char *pszString );
-void			NETWORK_WriteBit( BYTESTREAM_s *byteStream, bool bit );
-void			NETWORK_WriteVariable( BYTESTREAM_s *byteStream, int value );
-void			NETWORK_WriteShortByte( BYTESTREAM_s *byteStream, int value, int bits );
-
-void			NETWORK_WriteHeader( BYTESTREAM_s *pByteStream, int Byte );
-bool			NETWORK_StringToIP( const char *pszAddress, char *pszIP0, char *pszIP1, char *pszIP2, char *pszIP3 );
 
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- CLASSES ---------------------------------------------------------------------------------------------------------------------------------------
@@ -377,15 +465,15 @@ public:
 	ULONG			getFirstMatchingEntryIndex( const NETADDRESS_s &Address ) const;
 	bool			isIPInList( const IPStringArray &szAddress ) const;
 	bool			isIPInList( const NETADDRESS_s &Address ) const;
-	ULONG			doesEntryExist( const char *pszIP0, const char *pszIP1, const char *pszIP2, const char *pszIP3 ) const;
+	ULONG			doesEntryExist( const IPStringArray &szAddress ) const;
 	IPADDRESSBAN_s	getEntry( const ULONG ulIdx ) const;
 	std::string		getEntryAsString( const ULONG ulIdx, bool bIncludeComment = true, bool bIncludeExpiration = true, bool bInludeNewline = true ) const;
 	ULONG			getEntryIndex( const NETADDRESS_s &Address ) const; // [RC]
 	const char		*getEntryComment( const NETADDRESS_s &Address ) const; // [RC]
 	time_t			getEntryExpiration( const NETADDRESS_s &Address ) const; // [RC]
-	void			addEntry( const char *pszIP0, const char *pszIP1, const char *pszIP2, const char *pszIP3, const char *pszPlayerName, const char *pszComment, std::string &Message, time_t tExpiration );
+	void			addEntry( const IPStringArray &szAddress, const char *pszPlayerName, const char *pszComment, std::string &Message, time_t tExpiration );
 	void			addEntry( const char *pszIPAddress, const char *pszPlayerName, const char *pszComment, std::string &Message, time_t tExpiration );
-	void			removeEntry( const char *pszIP0, const char *pszIP1, const char *pszIP2, const char *pszIP3, std::string &Message );
+	void			removeEntry( const IPStringArray &szAddress, std::string &Message );
 	void			removeEntry( const char *pszIPAddress, std::string &Message );
 	void			removeEntry( ULONG ulEntryIdx ); // [RC]
 	void			copy( IPList &destination ); // [RC]

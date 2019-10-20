@@ -32,6 +32,7 @@
 **
 */
 
+#include <cfloat>
 
 void M_DrawConText (int color, int x, int y, const char *str);
 void M_SetVideoMode();
@@ -77,18 +78,16 @@ public:
 
 class FOptionMenuItemCommand : public FOptionMenuItemSubmenu
 {
+	bool mUnsafe;
 public:
 	FOptionMenuItemCommand(const char *label, const char *menu)
 		: FOptionMenuItemSubmenu(label, menu)
 	{
+		mUnsafe = true;
 	}
 
-	bool Activate()
-	{
-		S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", snd_menuvolume, ATTN_NONE);
-		C_DoCommand(mAction);
-		return true;
-	}
+	// [BB] Moved implementation to c_dispatch.cpp
+	bool Activate();
 
 };
 
@@ -325,9 +324,9 @@ public:
 	}
 
 	// [TP]
-	bool IsServerInfo() const
+	bool IsServerCVar() const override
 	{
-		return mCVar && mCVar->IsServerInfo();
+		return mCVar && mCVar->IsServerCVar();
 	}
 };
 
@@ -753,9 +752,9 @@ public:
 	}
 
 	// [TP]
-	bool IsServerInfo() const
+	bool IsServerCVar() const override
 	{
-		return mCVar && mCVar->IsServerInfo();
+		return mCVar && mCVar->IsServerCVar();
 	}
 };
 
@@ -855,9 +854,9 @@ public:
 	}
 
 	// [TP]
-	bool IsServerInfo() const
+	bool IsServerCVar() const override
 	{
-		return mCVar && mCVar->IsServerInfo();
+		return mCVar && mCVar->IsServerCVar();
 	}
 };
 
@@ -1069,9 +1068,9 @@ public:
 		return false;
 	}
 
-	bool IsServerInfo() const
+	bool IsServerCVar() const override
 	{
-		return mCVar && mCVar->IsServerInfo();
+		return mCVar && mCVar->IsServerCVar();
 	}
 
 	bool Selectable()

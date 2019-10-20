@@ -107,11 +107,11 @@ void DOMINATION_SendState(ULONG ulPlayerExtra)
 		return;
 
 	SERVER_CheckClientBuffer(ulPlayerExtra, NumPoints + 4, true);
-	NETWORK_WriteLong(&SERVER_GetClient(ulPlayerExtra)->PacketBuffer.ByteStream, NumPoints);
+	SERVER_GetClient(ulPlayerExtra)->PacketBuffer.ByteStream.WriteLong(NumPoints);
 	for(unsigned int i = 0;i < NumPoints;i++)
 	{
 		//one byte should be enough to hold the value of the team.
-		NETWORK_WriteByte(&SERVER_GetClient( ulPlayerExtra )->PacketBuffer.ByteStream, PointOwners[i]);
+		SERVER_GetClient( ulPlayerExtra )->PacketBuffer.ByteStream.WriteByte(PointOwners[i]);
 	}
 }
 
@@ -196,7 +196,7 @@ void DOMINATION_SetOwnership(unsigned int point, player_t *toucher)
 	unsigned int team = toucher->ulTeam;
 
 	PointOwners[point] = team;
-	Printf ( "%s\\c- has taken control of %s\n", toucher->userinfo.GetName(), (*level.info->SectorInfo.PointNames[point]).GetChars() );
+	Printf ( "%s has taken control of %s\n", toucher->userinfo.GetName(), (*level.info->SectorInfo.PointNames[point]).GetChars() );
 	for(unsigned int i = 0;i < level.info->SectorInfo.Points[point]->Size();i++)
 	{
 		unsigned int secnum = (*level.info->SectorInfo.Points[point])[i];

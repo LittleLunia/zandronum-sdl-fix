@@ -40,6 +40,9 @@
 #include "doomtype.h"
 // [BB] New #includes.
 #include "r_data/r_translate.h"
+#include <algorithm>
+#include <iterator>
+#include "i_system.h"
 
 #define LOCAL_SIZE				20
 #define NUM_MAPVARS				128
@@ -63,13 +66,32 @@ struct InitIntToZero
 };
 typedef TMap<SDWORD, SDWORD, THashTraits<SDWORD>, InitIntToZero> FWorldGlobalArray;
 
-// ACS variables with world scope
-extern SDWORD ACS_WorldVars[NUM_WORLDVARS];
-extern FWorldGlobalArray ACS_WorldArrays[NUM_WORLDVARS];
+// Type of elements count is unsigned int instead of size_t to match ACSStringPool interface
+template <typename T, unsigned int N>
+struct BoundsCheckingArray
+{
+	T &operator[](const unsigned int index)
+	{
+		if (index >= N)
+		{
+			I_Error("Out of bounds memory access in ACS VM");
+		}
+
+		return buffer[index];
+	}
+
+	T *Pointer() { return buffer; }
+	unsigned int Size() const { return N; }
+
+	void Fill(const T &value) { std::fill(std::begin(buffer), std::end(buffer), value); }
+
+private:
+	T buffer[N];
+};
 
 // ACS variables with global scope
-extern SDWORD ACS_GlobalVars[NUM_GLOBALVARS];
-extern FWorldGlobalArray ACS_GlobalArrays[NUM_GLOBALVARS];
+extern BoundsCheckingArray<SDWORD, NUM_GLOBALVARS> ACS_GlobalVars;
+extern BoundsCheckingArray<FWorldGlobalArray, NUM_GLOBALVARS> ACS_GlobalArrays;
 
 #define LIBRARYID_MASK			0xFFF00000
 #define LIBRARYID_SHIFT			20
@@ -88,8 +110,8 @@ class ACSStringPool
 {
 public:
 	ACSStringPool();
-	int AddString(const char *str, const SDWORD *stack, int stackdepth);
-	int AddString(FString &str, const SDWORD *stack, int stackdepth);
+	int AddString(const char *str);
+	int AddString(FString &str);
 	const char *GetString(int strnum);
 	void LockString(int strnum);
 	void UnlockString(int strnum);
@@ -107,7 +129,7 @@ public:
 
 private:
 	int FindString(const char *str, size_t len, unsigned int h, unsigned int bucketnum);
-	int InsertString(FString &str, unsigned int h, unsigned int bucketnum, const SDWORD *stack, int stackdepth);
+	int InsertString(FString &str, unsigned int h, unsigned int bucketnum);
 	void FindFirstFreeEntry(unsigned int base);
 
 	enum { NUM_BUCKETS = 251 };
@@ -127,7 +149,7 @@ private:
 };
 extern ACSStringPool GlobalACSStrings;
 
-void P_CollectACSGlobalStrings(const SDWORD *stack, int stackdepth);
+void P_CollectACSGlobalStrings();
 void P_ReadACSVars(PNGHandle *);
 void P_WriteACSVars(FILE*);
 void P_ClearACSVars(bool);
@@ -152,6 +174,89 @@ struct ProfileCollector
 	int Index;
 };
 
+class ACSLocalVariables
+{
+public:
+	ACSLocalVariables(SDWORD *Memory, size_t Count)
+	: memory(Memory)
+	, count(Count)
+	{
+	}
+
+	void Reset(SDWORD *const memory, const size_t count)
+	{
+		// TODO: pointer sanity check?
+		// TODO: constraints on count?
+
+		this->memory = memory;
+		this->count = count;
+	}
+
+	SDWORD& operator[](const size_t index)
+	{
+		if (index >= count)
+		{
+			I_Error("Out of bounds access to local variables in ACS VM");
+		}
+
+		return memory[index];
+	}
+
+	const SDWORD *GetPointer() const
+	{
+		return memory;
+	}
+
+private:
+	SDWORD *memory;
+	size_t count;
+};
+
+struct ACSLocalArrayInfo
+{
+	unsigned int Size;
+	int Offset;
+};
+
+struct ACSLocalArrays
+{
+	unsigned int Count;
+	ACSLocalArrayInfo *Info;
+
+	ACSLocalArrays()
+	{
+		Count = 0;
+		Info = NULL;
+	}
+	~ACSLocalArrays()
+	{
+		if (Info != NULL)
+		{
+			delete[] Info;
+			Info = NULL;
+		}
+	}
+
+	// Bounds-checking Set and Get for local arrays
+	void Set(ACSLocalVariables &locals, int arraynum, int arrayentry, int value)
+	{
+		if ((unsigned int)arraynum < Count &&
+			(unsigned int)arrayentry < Info[arraynum].Size)
+		{
+			locals[Info[arraynum].Offset + arrayentry] = value;
+		}
+	}
+	int Get(ACSLocalVariables &locals, int arraynum, int arrayentry)
+	{
+		if ((unsigned int)arraynum < Count &&
+			(unsigned int)arrayentry < Info[arraynum].Size)
+		{
+			return locals[Info[arraynum].Offset + arrayentry];
+		}
+		return 0;
+	}
+};
+
 // The in-memory version
 struct ScriptPtr
 {
@@ -161,6 +266,7 @@ struct ScriptPtr
 	BYTE ArgCount;
 	WORD VarCount;
 	WORD Flags;
+	ACSLocalArrays LocalArrays;
 
 	ACSProfileInfo ProfileData;
 };
@@ -197,13 +303,23 @@ struct ScriptFlagsPtr
 	WORD Flags;
 };
 
-struct ScriptFunction
+struct ScriptFunctionInFile
 {
 	BYTE ArgCount;
 	BYTE LocalCount;
 	BYTE HasReturnValue;
 	BYTE ImportNum;
 	DWORD Address;
+};
+
+struct ScriptFunction
+{
+	BYTE ArgCount;
+	BYTE HasReturnValue;
+	BYTE ImportNum;
+	int  LocalCount;
+	DWORD Address;
+	ACSLocalArrays LocalArrays;
 };
 
 // Script types
@@ -339,7 +455,7 @@ public:
 	ACSProfileInfo *GetFunctionProfileData(ScriptFunction *func) { return GetFunctionProfileData((int)(func - (ScriptFunction *)Functions)); }
 	const char *LookupString (DWORD index) const;
 
-	SDWORD *MapVars[NUM_MAPVARS];
+	BoundsCheckingArray<SDWORD *, NUM_MAPVARS> MapVars;
 
 	static FBehavior *StaticLoadModule (int lumpnum, FileReader * fr=NULL, int len=0);
 	static void StaticLoadDefaultModules ();
@@ -372,7 +488,7 @@ private:
 	BYTE *Chunks;
 	ScriptPtr *Scripts;
 	int NumScripts;
-	BYTE *Functions;
+	ScriptFunction *Functions;
 	ACSProfileInfo *FunctionProfileData;
 	int NumFunctions;
 	ArrayInfo *ArrayStore;
@@ -781,12 +897,29 @@ public:
 		PCD_SCRIPTWAITNAMED,
 		PCD_TRANSLATIONRANGE3,
 		PCD_GOTOSTACK,
+		PCD_ASSIGNSCRIPTARRAY,
+		PCD_PUSHSCRIPTARRAY,
+		PCD_ADDSCRIPTARRAY,
+		PCD_SUBSCRIPTARRAY,
+		PCD_MULSCRIPTARRAY,
+		PCD_DIVSCRIPTARRAY,
+/*370*/	PCD_MODSCRIPTARRAY,
+		PCD_INCSCRIPTARRAY,
+		PCD_DECSCRIPTARRAY,
+		PCD_ANDSCRIPTARRAY,
+		PCD_EORSCRIPTARRAY,
+		PCD_ORSCRIPTARRAY,
+		PCD_LSSCRIPTARRAY,
+		PCD_RSSCRIPTARRAY,
+		PCD_PRINTSCRIPTCHARARRAY,
+		PCD_PRINTSCRIPTCHRANGE,
+/*380*/	PCD_STRCPYTOSCRIPTCHRANGE,
 
 		// [BB] We need to fix the number for the new commands!
 		// [CW] Begin team additions.
 		PCD_GETTEAMPLAYERCOUNT,
 		// [CW] End team additions.
-/*363*/	PCODE_COMMAND_COUNT
+/*381*/	PCODE_COMMAND_COUNT
 	};
 
 	// Some constants used by ACS scripts
@@ -929,7 +1062,7 @@ protected:
 	int DoSpawnSpot (int type, int spot, int tid, int angle, bool forced);
 	int DoSpawnSpotFacing (int type, int spot, int tid, bool forced);
 	int DoClassifyActor (int tid);
-	int CallFunction(int argCount, int funcIndex, SDWORD *args, const SDWORD *stack, int stackdepth);
+	int CallFunction(int argCount, int funcIndex, SDWORD *args);
 
 	void DoFadeTo (int r, int g, int b, int a, fixed_t time);
 	void DoFadeRange (int r1, int g1, int b1, int a1,
@@ -937,7 +1070,7 @@ protected:
 	void DoSetFont (int fontnum);
 	void SetActorProperty (int tid, int property, int value);
 	void DoSetActorProperty (AActor *actor, int property, int value);
-	int GetActorProperty (int tid, int property, const SDWORD *stack, int stackdepth);
+	int GetActorProperty (int tid, int property);
 	int CheckActorProperty (int tid, int property, int value);
 	int GetPlayerInput (int playernum, int inputnum);
 
@@ -1008,7 +1141,7 @@ bool	ACS_IsScriptClientSide( int script );
 bool	ACS_IsScriptClientSide( const ScriptPtr *pScriptData );
 bool	ACS_IsScriptPukeable( ULONG ulScript );
 int		ACS_GetTranslationIndex( FRemapTable *pTranslation );
-int		ACS_PushAndReturnDynamicString ( const FString &Work, const SDWORD *stack, int stackdepth );
+int		ACS_PushAndReturnDynamicString ( const FString &Work );
 bool	ACS_ExistsScript( int script );
 
 // [BB] Export DoGiveInv

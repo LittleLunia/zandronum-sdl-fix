@@ -90,14 +90,16 @@ static FRandom pr_gunshot ("GunShot");
 //
 //---------------------------------------------------------------------------
 
-void P_NewPspriteTick()
+// [EP] Added player parameter.
+void P_NewPspriteTick(player_t *player) 
 {
 	// This function should be called after the beginning of a tick, before any possible
 	// prprite-event, or near the end, after any possible psprite event.
 	// Because data is reset for every tick (which it must be) this has no impact on savegames.
 	for (int i = 0; i<MAXPLAYERS; i++)
 	{
-		if (playeringame[i])
+		// [EP] if player is not NULL, only this player's psprite settings are changed.
+		if (playeringame[i] && ( player == NULL || player-players == i ))
 		{
 			pspdef_t *pspdef = players[i].psprites;
 			for (int j = 0;j < NUMPSPRITES; j++)
@@ -124,9 +126,7 @@ void P_SetPsprite (player_t *player, int position, FState *state, bool nofunctio
 	}
 
 	psp = &player->psprites[position];
-	// [BB] This ZDoom fix causes client/server weapon sync problems.
-	// Till those are fixed, this stays disabled.
-	//psp->processPending = false; // Do not subsequently perform periodic processing within the same tick.
+	psp->processPending = false; // Do not subsequently perform periodic processing within the same tick.
 
 	do
 	{
@@ -1030,7 +1030,8 @@ void A_GunFlash(AActor *self, FState *flash, const int Flags)
 		}
 	}
 
-	if (flash == NULL)
+	// [BB] In a crash log, client_GiveInventory was calling this with ReadyWeapon == NULL when giving some CustomInventory. 
+	if (flash == NULL && player->ReadyWeapon)
 	{
 		if (player->ReadyWeapon->bAltFire) flash = player->ReadyWeapon->FindState(NAME_AltFlash);
 		if (flash == NULL) flash = player->ReadyWeapon->FindState(NAME_Flash);

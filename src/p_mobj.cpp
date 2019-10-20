@@ -2359,13 +2359,8 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 						{	// Struck a player/creature
 						
 							// Potentially reward the player who shot this missile with an accuracy/precision medal.
-							if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
-							{
-								if ( mo->target->player->bStruckPlayer )
-									PLAYER_StruckPlayer( mo->target->player );
-								else
-									mo->target->player->ulConsecutiveHits = 0;
-							}
+							if (( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false )
+								PLAYER_CheckStruckPlayer ( mo->target );
 
 							P_ExplodeMissile (mo, NULL, BlockingMobj);
 						}
@@ -2439,13 +2434,8 @@ explode:
 					}
 
 					// Potentially reward the player who shot this missile with an accuracy/precision medal.
-					if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
-					{
-						if ( mo->target->player->bStruckPlayer )
-							PLAYER_StruckPlayer( mo->target->player );
-						else
-							mo->target->player->ulConsecutiveHits = 0;
-					}
+					if (( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) 
+						PLAYER_CheckStruckPlayer ( mo->target );
 
 					// [RH] Don't explode on horizon lines.
 					if (mo->BlockingLine != NULL && mo->BlockingLine->special == Line_Horizon)
@@ -3107,13 +3097,8 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 					P_HitFloor (mo);
 
 					// [BC] Potentially reward the player who shot this missile with an accuracy/precision medal.
-					if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
-					{
-						if ( mo->target->player->bStruckPlayer )
-							PLAYER_StruckPlayer( mo->target->player );
-						else
-							mo->target->player->ulConsecutiveHits = 0;
-					}
+					if (( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false )
+						PLAYER_CheckStruckPlayer ( mo->target );
 
 					P_ExplodeMissile (mo, NULL, NULL);
 					return;
@@ -3163,6 +3148,10 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 					if ( ( zacompatflags & ZACOMPATF_SKULLTAG_JUMPING ) || mo->player->jumpTics < 0 || mo->velz < minvel)
 					{ // delay any jumping for a short while
 						mo->player->jumpTics = 7;
+
+						// [Leo] Inform the client of the jumpTics change.
+						if ( NETWORK_GetState() == NETSTATE_SERVER )
+							SERVERCOMMANDS_SetLocalPlayerJumpTics( mo->player - players );
 					}
 					if (mo->velz < minvel && !(mo->flags & MF_NOGRAVITY))
 					{
@@ -3246,13 +3235,8 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 				}
 
 				// [BC] Potentially reward the player who shot this missile with an accuracy/precision medal.
-				if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
-				{
-					if ( mo->target->player->bStruckPlayer )
-						PLAYER_StruckPlayer( mo->target->player );
-					else
-						mo->target->player->ulConsecutiveHits = 0;
-				}
+				if (( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false )
+					PLAYER_CheckStruckPlayer ( mo->target );
 
 				P_ExplodeMissile (mo, NULL, NULL);
 				return;
@@ -3991,10 +3975,9 @@ void AActor::Tick ()
 	// [BB] Voodoo dolls are an exemption.
 	if ( player && player->mo == this )
 	{
-		// In server mode, only allow the ticking of a player if he's a client currently
-		// having his movement commands executed.
+		// Only tick the body if we processed a movement command this tic.
 		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
-			( SERVER_GetCurrentClient( ) != ( player - players )) &&
+			( SERVER_GetClient( player - players )->lLastMoveTickProcess != gametic ) &&
 			( player->bIsBot == false ))
 		{
 			return;
@@ -7097,13 +7080,9 @@ bool P_CheckMissileSpawn (AActor* th, fixed_t maxdist, bool bExplode)
 			else
 			{
 				// Potentially reward the player who shot this missile with an accuracy/precision medal.
-				if ((( th->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && th->target && th->target->player )
-				{
-					if ( th->target->player->bStruckPlayer )
-						PLAYER_StruckPlayer( th->target->player );
-					else
-						th->target->player->ulConsecutiveHits = 0;
-				}
+				if (( th->ulSTFlags & STFL_EXPLODEONDEATH ) == false )
+					PLAYER_CheckStruckPlayer ( th->target );
+
 				// [WS] Can we explode the missile?
 				if (bExplode)
 					P_ExplodeMissile (th, NULL, th->BlockingMobj);

@@ -184,13 +184,13 @@ void SERVER_MASTER_Tick( void )
 	g_AddressMasterServer.SetPort( g_usMasterPort );
 
 	// Write to our packet a challenge to the master server.
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_CHALLENGE );
+	g_MasterServerBuffer.ByteStream.WriteLong( SERVER_MASTER_CHALLENGE );
 	// [BB] Also send a string that will allow us to verify that a master banlist was actually sent from the master.
-	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_GetMasterBanlistVerificationString().GetChars() );
+	g_MasterServerBuffer.ByteStream.WriteString( SERVER_GetMasterBanlistVerificationString().GetChars() );
 	// [BB] Also tell the master whether we are enforcing its ban list.
-	NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_enforcemasterbanlist );
+	g_MasterServerBuffer.ByteStream.WriteByte( sv_enforcemasterbanlist );
 	// [BB] And tell which code revision number the server was built with.
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, GetRevisionNumber() );
+	g_MasterServerBuffer.ByteStream.WriteLong( GetRevisionNumber() );
 
 	// Send the master server our packet.
 //	NETWORK_LaunchPacket( &g_MasterServerBuffer, g_AddressMasterServer, true );
@@ -216,7 +216,7 @@ void SERVER_MASTER_Broadcast( void )
 	broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
 	broadcast_addr.sin_port = htons( DEFAULT_BROADCAST_PORT );
 	NETADDRESS_s AddressBroadcast;
-	AddressBroadcast.LoadFromSocketAddress( broadcast_addr );
+	AddressBroadcast.LoadFromSocketAddress( reinterpret_cast<const sockaddr&> ( broadcast_addr ) );
 
 	// [BB] Under all Windows versions broadcasts to INADDR_BROADCAST seem to work fine
 	// while class A broadcasts don't work under Vista/7. So just use INADDR_BROADCAST.
@@ -251,18 +251,19 @@ void SERVER_MASTER_Broadcast( void )
 #endif
 
 	// Broadcast our packet.
-	SERVER_MASTER_SendServerInfo( AddressBroadcast, SQF_ALL, 0, true );
+	SERVER_MASTER_SendServerInfo( AddressBroadcast, SQF_ALL, 0, SQF2_ALL, true );
 //	NETWORK_WriteLong( &g_MasterServerBuffer, MASTER_CHALLENGE );
 //	NETWORK_LaunchPacket( g_MasterServerBuffer, AddressBroadcast, true );
 }
 
 //*****************************************************************************
 //
-void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ulTime, bool bBroadcasting )
+void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ulTime, ULONG ulFlags2, bool bBroadcasting )
 {
-	char		szAddress[4][4];
+	IPStringArray szAddress;
 	ULONG		ulIdx;
 	ULONG		ulBits;
+	ULONG 		ulBits2;
 
 	// Let's just use the master server buffer! It gets cleared again when we need it anyway!
 	g_MasterServerBuffer.Clear();
@@ -280,10 +281,10 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 				if ( Address.CompareNoPort( g_StoredQueryIPs[ulIdx].Address ))
 				{
 					// Write our header.
-					NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_LAUNCHER_IGNORING );
+					g_MasterServerBuffer.ByteStream.WriteLong( SERVER_LAUNCHER_IGNORING );
 
 					// Send the time the launcher sent to us.
-					NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, ulTime );
+					g_MasterServerBuffer.ByteStream.WriteLong( ulTime );
 
 					// Send the packet.
 	//				NETWORK_LaunchPacket( &g_MasterServerBuffer, Address, true );
@@ -302,14 +303,14 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 		}
 	
 		// Now, check to see if this IP has been banend from this server.
-		Address.ToIPStringArray( szAddress );
+		szAddress.SetFrom ( Address );
 		if ( SERVERBAN_IsIPBanned( szAddress ))
 		{
 			// Write our header.
-			NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_LAUNCHER_BANNED );
+			g_MasterServerBuffer.ByteStream.WriteLong( SERVER_LAUNCHER_BANNED );
 
 			// Send the time the launcher sent to us.
-			NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, ulTime );
+			g_MasterServerBuffer.ByteStream.WriteLong( ulTime );
 
 			// Send the packet.
 			NETWORK_LaunchPacket( &g_MasterServerBuffer, Address );
@@ -333,13 +334,13 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 	}
 
 	// Write our header.
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_LAUNCHER_CHALLENGE );
+	g_MasterServerBuffer.ByteStream.WriteLong( SERVER_LAUNCHER_CHALLENGE );
 
 	// Send the time the launcher sent to us.
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, ulTime );
+	g_MasterServerBuffer.ByteStream.WriteLong( ulTime );
 
 	// Send our version. [K6] ...with OS
-	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, g_VersionWithOS.GetChars() );
+	g_MasterServerBuffer.ByteStream.WriteString( g_VersionWithOS.GetChars() );
 
 	// Send the information about the data that will be sent.
 	ulBits = ulFlags;
@@ -373,74 +374,78 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 	if ( D_GetDehFileNames().Size() == 0 )
 		ulBits &= ~SQF_DEH;
 
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, ulBits );
+	// [SB] If the client didn't send any extended flags, don't send any extended info
+	if ( ulFlags2 == 0 )
+		ulBits &= ~SQF_EXTENDED_INFO;
+
+	g_MasterServerBuffer.ByteStream.WriteLong( ulBits );
 
 	// Send the server name.
 	if ( ulBits & SQF_NAME )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_hostname );
+		g_MasterServerBuffer.ByteStream.WriteString( sv_hostname );
 
 	// Send the website URL.
 	if ( ulBits & SQF_URL )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_website );
+		g_MasterServerBuffer.ByteStream.WriteString( sv_website );
 
 	// Send the host's e-mail address.
 	if ( ulBits & SQF_EMAIL )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_hostemail );
+		g_MasterServerBuffer.ByteStream.WriteString( sv_hostemail );
 
 	if ( ulBits & SQF_MAPNAME )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, level.mapname );
+		g_MasterServerBuffer.ByteStream.WriteString( level.mapname );
 
 	if ( ulBits & SQF_MAXCLIENTS )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_maxclients );
+		g_MasterServerBuffer.ByteStream.WriteByte( sv_maxclients );
 
 	if ( ulBits & SQF_MAXPLAYERS )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_maxplayers );
+		g_MasterServerBuffer.ByteStream.WriteByte( sv_maxplayers );
 
 	// Send out the PWAD information.
 	if ( ulBits & SQF_PWADS )
 	{
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, NETWORK_GetPWADList().Size( ));
+		g_MasterServerBuffer.ByteStream.WriteByte( NETWORK_GetPWADList().Size( ));
 
 		for ( unsigned i = 0; i < NETWORK_GetPWADList().Size(); ++i )
-			NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, NETWORK_GetPWADList()[i].name );
+			g_MasterServerBuffer.ByteStream.WriteString( NETWORK_GetPWADList()[i].name );
 	}
 
 	if ( ulBits & SQF_GAMETYPE )
 	{
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, GAMEMODE_GetCurrentMode( ));
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, instagib );
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, buckshot );
+		g_MasterServerBuffer.ByteStream.WriteByte( GAMEMODE_GetCurrentMode( ));
+		g_MasterServerBuffer.ByteStream.WriteByte( instagib );
+		g_MasterServerBuffer.ByteStream.WriteByte( buckshot );
 	}
 
 	if ( ulBits & SQF_GAMENAME )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_GetGameName( ));
+		g_MasterServerBuffer.ByteStream.WriteString( SERVER_MASTER_GetGameName( ));
 
 	if ( ulBits & SQF_IWAD )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, NETWORK_GetIWAD( ));
+		g_MasterServerBuffer.ByteStream.WriteString( NETWORK_GetIWAD( ));
 
 	if ( ulBits & SQF_FORCEPASSWORD )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_forcepassword );
+		g_MasterServerBuffer.ByteStream.WriteByte( sv_forcepassword );
 
 	if ( ulBits & SQF_FORCEJOINPASSWORD )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_forcejoinpassword );
+		g_MasterServerBuffer.ByteStream.WriteByte( sv_forcejoinpassword );
 
 	if ( ulBits & SQF_GAMESKILL )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, gameskill );
+		g_MasterServerBuffer.ByteStream.WriteByte( gameskill );
 
 	if ( ulBits & SQF_BOTSKILL )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, botskill );
+		g_MasterServerBuffer.ByteStream.WriteByte( botskill );
 
 	if ( ulBits & SQF_DMFLAGS )
 	{
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags2 );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, compatflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( dmflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( dmflags2 );
+		g_MasterServerBuffer.ByteStream.WriteLong( compatflags );
 	}
 
 	if ( ulBits & SQF_LIMITS )
 	{
-		NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, fraglimit );
-		NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, static_cast<SHORT>(timelimit) );
+		g_MasterServerBuffer.ByteStream.WriteShort( fraglimit );
+		g_MasterServerBuffer.ByteStream.WriteShort( static_cast<SHORT>(timelimit) );
 		// [BB] We have to base the decision on whether to send "time left" on the same rounded
 		// timelimit value we just sent to the client.
 		if ( static_cast<SHORT>(timelimit) )
@@ -450,18 +455,18 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			lTimeLeft = (LONG)( timelimit - ( level.time / ( TICRATE * 60 )));
 			if ( lTimeLeft < 0 )
 				lTimeLeft = 0;
-			NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, lTimeLeft );
+			g_MasterServerBuffer.ByteStream.WriteShort( lTimeLeft );
 		}
-		NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, duellimit );
-		NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, pointlimit );
-		NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, winlimit );
+		g_MasterServerBuffer.ByteStream.WriteShort( duellimit );
+		g_MasterServerBuffer.ByteStream.WriteShort( pointlimit );
+		g_MasterServerBuffer.ByteStream.WriteShort( winlimit );
 	}
 
 	// Send the team damage scale.
 	if ( teamplay || teamgame || teamlms || teampossession || (( deathmatch == false ) && ( teamgame == false )))
 	{
 		if ( ulBits & SQF_TEAMDAMAGE )
-			NETWORK_WriteFloat( &g_MasterServerBuffer.ByteStream, teamdamage );
+			g_MasterServerBuffer.ByteStream.WriteFloat( teamdamage );
 	}
 
 	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
@@ -473,17 +478,17 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			for ( ulIdx = 0; ulIdx < 2; ulIdx++ )
 			{
 				if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetFragCount( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetFragCount( ulIdx ));
 				else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetWinCount( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetWinCount( ulIdx ));
 				else
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetScore( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetScore( ulIdx ));
 			}
 		}
 	}
 
 	if ( ulBits & SQF_NUMPLAYERS )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, SERVER_CalcNumPlayers( ));
+		g_MasterServerBuffer.ByteStream.WriteByte( SERVER_CalcNumPlayers( ));
 
 	if ( ulBits & SQF_PLAYERDATA )
 	{
@@ -492,55 +497,55 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			if ( playeringame[ulIdx] == false )
 				continue;
 
-			NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, players[ulIdx].userinfo.GetName() );
+			g_MasterServerBuffer.ByteStream.WriteString( players[ulIdx].userinfo.GetName() );
 			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
-				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].lPointCount );
+				g_MasterServerBuffer.ByteStream.WriteShort( players[ulIdx].lPointCount );
 			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
-				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].ulWins );
+				g_MasterServerBuffer.ByteStream.WriteShort( players[ulIdx].ulWins );
 			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
-				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].fragcount );
+				g_MasterServerBuffer.ByteStream.WriteShort( players[ulIdx].fragcount );
 			else
-				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].killcount );
+				g_MasterServerBuffer.ByteStream.WriteShort( players[ulIdx].killcount );
 
-			NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].ulPing );
-			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, PLAYER_IsTrueSpectator( &players[ulIdx] ));
-			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, players[ulIdx].bIsBot );
+			g_MasterServerBuffer.ByteStream.WriteShort( players[ulIdx].ulPing );
+			g_MasterServerBuffer.ByteStream.WriteByte( PLAYER_IsTrueSpectator( &players[ulIdx] ));
+			g_MasterServerBuffer.ByteStream.WriteByte( players[ulIdx].bIsBot );
 
 			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			{
 				if ( players[ulIdx].bOnTeam == false )
-					NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 255 );
+					g_MasterServerBuffer.ByteStream.WriteByte( 255 );
 				else
-					NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, players[ulIdx].ulTeam );
+					g_MasterServerBuffer.ByteStream.WriteByte( players[ulIdx].ulTeam );
 			}
 
-			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, players[ulIdx].ulTime / ( TICRATE * 60 ));
+			g_MasterServerBuffer.ByteStream.WriteByte( players[ulIdx].ulTime / ( TICRATE * 60 ));
 		}
 	}
 
 	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		if ( ulBits & SQF_TEAMINFO_NUMBER )
-			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, TEAM_GetNumAvailableTeams( ));
+			g_MasterServerBuffer.ByteStream.WriteByte( TEAM_GetNumAvailableTeams( ));
 
 		if ( ulBits & SQF_TEAMINFO_NAME )
 			for ( ulIdx = 0; ulIdx < TEAM_GetNumAvailableTeams( ); ulIdx++ )
-				NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, TEAM_GetName( ulIdx ));
+				g_MasterServerBuffer.ByteStream.WriteString( TEAM_GetName( ulIdx ));
 
 		if ( ulBits & SQF_TEAMINFO_COLOR )
 			for ( ulIdx = 0; ulIdx < TEAM_GetNumAvailableTeams( ); ulIdx++ )
-				NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, TEAM_GetColor( ulIdx ));
+				g_MasterServerBuffer.ByteStream.WriteLong( TEAM_GetColor( ulIdx ));
 
 		if ( ulBits & SQF_TEAMINFO_SCORE )
 		{
 			for ( ulIdx = 0; ulIdx < TEAM_GetNumAvailableTeams( ); ulIdx++ )
 			{
 				if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetFragCount( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetFragCount( ulIdx ));
 				else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetWinCount( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetWinCount( ulIdx ));
 				else
-					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetScore( ulIdx ));
+					g_MasterServerBuffer.ByteStream.WriteShort( TEAM_GetScore( ulIdx ));
 			}
 		}
 	}
@@ -549,54 +554,72 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 	if ( ulBits & SQF_TESTING_SERVER )
 	{
 #if ( BUILD_ID == BUILD_RELEASE )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 0 );
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, "" );
+		g_MasterServerBuffer.ByteStream.WriteByte( 0 );
+		g_MasterServerBuffer.ByteStream.WriteString( "" );
 #else
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 1 );
+		g_MasterServerBuffer.ByteStream.WriteByte( 1 );
 		// [BB] Name of the testing binary archive found in http://zandronum.com/
 		FString testingBinary;
 		testingBinary.Format ( "downloads/testing/%s/ZandroDev%s-%swindows.zip", GAMEVER_STRING, GAMEVER_STRING, GetGitTime() );
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, testingBinary.GetChars() );
+		g_MasterServerBuffer.ByteStream.WriteString( testingBinary.GetChars() );
 #endif
 	}
 
 	// [BB] We don't have a mandatory main data file anymore, so just send an empty string.
 	if ( ulBits & SQF_DATA_MD5SUM )
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, "" );
+		g_MasterServerBuffer.ByteStream.WriteString( "" );
 
 	// [BB] Send all dmflags and compatflags.
 	if ( ulBits & SQF_ALL_DMFLAGS )
 	{
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 6 );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags2 );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, zadmflags );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, compatflags );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, zacompatflags );
-		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, compatflags2 );
+		g_MasterServerBuffer.ByteStream.WriteByte( 6 );
+		g_MasterServerBuffer.ByteStream.WriteLong( dmflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( dmflags2 );
+		g_MasterServerBuffer.ByteStream.WriteLong( zadmflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( compatflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( zacompatflags );
+		g_MasterServerBuffer.ByteStream.WriteLong( compatflags2 );
 	}
 
 	// [BB] Send special security settings like sv_enforcemasterbanlist.
 	if ( ulBits & SQF_SECURITY_SETTINGS )
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, sv_enforcemasterbanlist );
+		g_MasterServerBuffer.ByteStream.WriteByte( sv_enforcemasterbanlist );
 
 	// [TP] Send optional wad indices.
 	if ( ulBits & SQF_OPTIONAL_WADS )
 	{
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, g_OptionalWadIndices.Size() );
+		g_MasterServerBuffer.ByteStream.WriteByte( g_OptionalWadIndices.Size() );
 
 		for ( unsigned i = 0; i < g_OptionalWadIndices.Size(); ++i )
-			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, g_OptionalWadIndices[i] );
+			g_MasterServerBuffer.ByteStream.WriteByte( g_OptionalWadIndices[i] );
 	}
 
 	// [TP] Send deh patches
 	if ( ulBits & SQF_DEH )
 	{
 		const TArray<FString>& names = D_GetDehFileNames();
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, names.Size() );
+		g_MasterServerBuffer.ByteStream.WriteByte( names.Size() );
 
 		for ( unsigned i = 0; i < names.Size(); ++i )
-			NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, names[i] );
+			g_MasterServerBuffer.ByteStream.WriteString( names[i] );
+	}
+
+	// [SB] handle extended flags
+	if ( ulBits & SQF_EXTENDED_INFO ) 
+	{
+		ulBits2 = ulFlags2;
+		ulBits2 &= SQF2_ALL;
+
+		g_MasterServerBuffer.ByteStream.WriteLong( ulBits2 );
+
+		// [SB] send MD5 hashes of PWADs
+		if ( ulBits2 & SQF2_PWAD_HASHES )
+		{
+			g_MasterServerBuffer.ByteStream.WriteByte( NETWORK_GetPWADList().Size( ) );
+
+			for ( unsigned i = 0; i < NETWORK_GetPWADList().Size(); ++i )
+				g_MasterServerBuffer.ByteStream.WriteString( NETWORK_GetPWADList()[i].checksum );
+		}
 	}
 
 //	NETWORK_LaunchPacket( &g_MasterServerBuffer, Address, true );
@@ -642,12 +665,12 @@ NETADDRESS_s SERVER_MASTER_GetMasterAddress( void )
 //
 void SERVER_MASTER_HandleVerificationRequest( BYTESTREAM_s *pByteStream  )
 {
-	LONG lVerificationNumber = NETWORK_ReadLong( pByteStream );
+	LONG lVerificationNumber = pByteStream->ReadLong();
 
 	g_MasterServerBuffer.Clear();
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_VERIFICATION );
-	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_GetMasterBanlistVerificationString().GetChars() );
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, lVerificationNumber );
+	g_MasterServerBuffer.ByteStream.WriteLong( SERVER_MASTER_VERIFICATION );
+	g_MasterServerBuffer.ByteStream.WriteString( SERVER_GetMasterBanlistVerificationString().GetChars() );
+	g_MasterServerBuffer.ByteStream.WriteLong( lVerificationNumber );
 
 	// [BB] Send the master server our packet.
 	NETWORK_LaunchPacket( &g_MasterServerBuffer, SERVER_MASTER_GetMasterAddress () );
@@ -658,8 +681,8 @@ void SERVER_MASTER_HandleVerificationRequest( BYTESTREAM_s *pByteStream  )
 void SERVER_MASTER_SendBanlistReceipt ( void )
 {
 	g_MasterServerBuffer.Clear();
-	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_BANLIST_RECEIPT );
-	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_GetMasterBanlistVerificationString().GetChars() );
+	g_MasterServerBuffer.ByteStream.WriteLong( SERVER_MASTER_BANLIST_RECEIPT );
+	g_MasterServerBuffer.ByteStream.WriteString( SERVER_GetMasterBanlistVerificationString().GetChars() );
 
 	// [BB] Send the master server our packet.
 	NETWORK_LaunchPacket( &g_MasterServerBuffer, SERVER_MASTER_GetMasterAddress () );
@@ -686,16 +709,16 @@ CUSTOM_CVAR( Bool, sv_broadcast, true, CVAR_ARCHIVE|CVAR_NOSETBYACS )
 }
 
 // Name of this server on launchers.
-CUSTOM_CVAR( String, sv_hostname, "Unnamed " GAMENAME " server", CVAR_ARCHIVE|CVAR_NOSETBYACS )
+CUSTOM_CVAR( String, sv_hostname, "Unnamed " GAMENAME " server", CVAR_ARCHIVE|CVAR_NOSETBYACS|CVAR_SERVERINFO )
 {
 	SERVERCONSOLE_UpdateTitleString( (const char *)self );
 }
 
 // Website that has the wad this server is using, possibly with other info.
-CVAR( String, sv_website, "", CVAR_ARCHIVE|CVAR_NOSETBYACS )
+CVAR( String, sv_website, "", CVAR_ARCHIVE|CVAR_NOSETBYACS|CVAR_SERVERINFO )
 
 // E-mail address of the person running this server.
-CVAR( String, sv_hostemail, "", CVAR_ARCHIVE|CVAR_NOSETBYACS )
+CVAR( String, sv_hostemail, "", CVAR_ARCHIVE|CVAR_NOSETBYACS|CVAR_SERVERINFO )
 
 // IP address of the master server.
 // [BB] Client and server use this now, therefore the name doesn't begin with "sv_"

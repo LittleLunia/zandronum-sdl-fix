@@ -64,7 +64,7 @@
 #include "cl_demo.h"
 #include "cl_main.h"
 
-void P_MovePlayer (player_t *player, ticcmd_t *cmd);
+void P_MovePlayer (player_t *player);
 void P_CalcHeight (player_t *player);
 void P_DeathThink (player_t *player);
 bool	P_AdjustFloorCeil (AActor *thing);
@@ -78,17 +78,22 @@ static	bool		g_bPredicting = false;
 // Version of gametic for normal games, as well as demos.
 static	ULONG		g_ulGameTick;
 
+// Data used for the base of our predictions.
+static fixed_t		g_PositionBase[3][CLIENT_PREDICTION_TICS];
+static fixed_t		g_VelocityBase[3][CLIENT_PREDICTION_TICS];
+static int			g_JumpTicsBase[CLIENT_PREDICTION_TICS];
+
 // Store crucial player attributes for prediction.
 static	ticcmd_t	g_SavedTiccmd[CLIENT_PREDICTION_TICS];
 static	angle_t		g_SavedAngle[CLIENT_PREDICTION_TICS];
 static	fixed_t		g_SavedPitch[CLIENT_PREDICTION_TICS];
 static	fixed_t		g_SavedCrouchfactor[CLIENT_PREDICTION_TICS];
-static	LONG		g_lSavedJumpTicks[CLIENT_PREDICTION_TICS];
 static	BYTE		g_SavedTurnTicks[CLIENT_PREDICTION_TICS];
 static	LONG		g_lSavedReactionTime[CLIENT_PREDICTION_TICS];
 static	LONG		g_lSavedWaterLevel[CLIENT_PREDICTION_TICS];
 static	bool		g_bSavedOnFloor[CLIENT_PREDICTION_TICS];
 static	bool		g_bSavedOnMobj[CLIENT_PREDICTION_TICS];
+static	bool		g_bSavedOnGround[CLIENT_PREDICTION_TICS];
 static	fixed_t		g_SavedFloorZ[CLIENT_PREDICTION_TICS];
 
 #ifdef	_DEBUG
@@ -103,6 +108,7 @@ static	void	client_predict_BeginPrediction( player_t *pPlayer );
 static	void	client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks );
 static	void	client_predict_EndPrediction( player_t *pPlayer );
 static	void	client_predict_SaveOnGroundStatus( const player_t *pPlayer, const ULONG Tick );
+static	void	client_predict_SavePrediction( const player_t *pPlayer, const unsigned int Tick );
 
 //*****************************************************************************
 //	FUNCTIONS
@@ -111,6 +117,35 @@ void CLIENT_PREDICT_Construct( void )
 {
 	for ( int i = 0; i < CLIENT_PREDICTION_TICS; ++i )
 		g_SavedCrouchfactor[i] = FRACUNIT;
+
+	memset( g_PositionBase, 0, sizeof( g_PositionBase ));
+	memset( g_VelocityBase, 0, sizeof( g_VelocityBase ));
+	memset( g_JumpTicsBase, 0, sizeof( g_JumpTicsBase ));
+}
+
+//*****************************************************************************
+//
+void CLIENT_PREDICT_SetPosition( fixed_t X, fixed_t Y, fixed_t Z )
+{
+	g_PositionBase[0][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = X;
+	g_PositionBase[1][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = Y;
+	g_PositionBase[2][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = Z;
+}
+
+//*****************************************************************************
+//
+void CLIENT_PREDICT_SetVelocity( fixed_t X, fixed_t Y, fixed_t Z )
+{
+	g_VelocityBase[0][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = X;
+	g_VelocityBase[1][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = Y;
+	g_VelocityBase[2][CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = Z;
+}
+
+//*****************************************************************************
+//
+void CLIENT_PREDICT_SetJumpTics( int tics )
+{
+	g_JumpTicsBase[CLIENT_GetLastConsolePlayerUpdateTick() % CLIENT_PREDICTION_TICS] = tics;
 }
 
 //*****************************************************************************
@@ -124,6 +159,7 @@ void CLIENT_PREDICT_PlayerPredict( void )
 	fixed_t		SavedY;
 	fixed_t		SavedZ;
 #endif
+	const unsigned int BaseTick = CLIENT_GetLastConsolePlayerUpdateTick();
 
 	// Always predict only the console player.
 	pPlayer = &players[consoleplayer];
@@ -162,11 +198,11 @@ void CLIENT_PREDICT_PlayerPredict( void )
 
 	// [BB] This would mean that a negative amount of prediction tics is needed, so something is wrong.
 	// So far it looks like the "lagging at connect / map start" prevented this from happening before.
-	if ( CLIENT_GetLastConsolePlayerUpdateTick() > g_ulGameTick )
+	if ( BaseTick > g_ulGameTick )
 		return;
 
 	// How many ticks of prediction do we need?
-	ulPredictionTicks = g_ulGameTick - CLIENT_GetLastConsolePlayerUpdateTick( );
+	ulPredictionTicks = g_ulGameTick - BaseTick;
 	// [BB] We can't predict more tics than we store.
 	if ( ulPredictionTicks > CLIENT_PREDICTION_TICS )
 		ulPredictionTicks = CLIENT_PREDICTION_TICS;
@@ -176,24 +212,24 @@ void CLIENT_PREDICT_PlayerPredict( void )
 #ifdef	_DEBUG
 	if (( cl_showonetickpredictionerrors ) && ( ulPredictionTicks == 0 ))
 	{
-		if (( pPlayer->ServerXYZ[0] != pPlayer->mo->x ) ||
-			( pPlayer->ServerXYZ[1] != pPlayer->mo->y ) ||
-			( pPlayer->ServerXYZ[2] != pPlayer->mo->z ))
+		if (( g_PositionBase[0][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->x ) ||
+			( g_PositionBase[1][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->y ) ||
+			( g_PositionBase[2][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->z ))
 		{
-			Printf( "(%d) WARNING! ServerXYZ does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
-			Printf( "     X: %d, %d\n", pPlayer->ServerXYZ[0], pPlayer->mo->x );
-			Printf( "     Y: %d, %d\n", pPlayer->ServerXYZ[1], pPlayer->mo->y );
-			Printf( "     Z: %d, %d\n", pPlayer->ServerXYZ[2], pPlayer->mo->z );
+			Printf( "(%d) WARNING! Server XYZ does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
+			Printf( "     X: %d, %d\n", g_PositionBase[0][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->x );
+			Printf( "     Y: %d, %d\n", g_PositionBase[1][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->y );
+			Printf( "     Z: %d, %d\n", g_PositionBase[2][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->z );
 		}
 
-		if (( pPlayer->ServerXYZVel[0] != pPlayer->mo->velx ) ||
-			( pPlayer->ServerXYZVel[1] != pPlayer->mo->vely ) ||
-			( pPlayer->ServerXYZVel[2] != pPlayer->mo->velz ))
+		if (( g_VelocityBase[0][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->velx ) ||
+			( g_VelocityBase[1][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->vely ) ||
+			( g_VelocityBase[2][BaseTick % CLIENT_PREDICTION_TICS] != pPlayer->mo->velz ))
 		{
-			Printf( "(%d) WARNING! ServerXYZVel does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
-			Printf( "     X: %d, %d\n", pPlayer->ServerXYZVel[0], pPlayer->mo->velx );
-			Printf( "     Y: %d, %d\n", pPlayer->ServerXYZVel[1], pPlayer->mo->vely );
-			Printf( "     Z: %d, %d\n", pPlayer->ServerXYZVel[2], pPlayer->mo->velz );
+			Printf( "(%d) WARNING! Server XYZ velocity does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
+			Printf( "     X: %d, %d\n", g_VelocityBase[0][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->velx );
+			Printf( "     Y: %d, %d\n", g_VelocityBase[1][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->vely );
+			Printf( "     Z: %d, %d\n", g_VelocityBase[2][BaseTick % CLIENT_PREDICTION_TICS], pPlayer->mo->velz );
 		}
 	}
 #endif
@@ -204,14 +240,17 @@ void CLIENT_PREDICT_PlayerPredict( void )
 
 	// Set the player's position as told to him by the server.
 	CLIENT_MoveThing( pPlayer->mo,
-		pPlayer->ServerXYZ[0],
-		pPlayer->ServerXYZ[1],
-		pPlayer->ServerXYZ[2] );
+		g_PositionBase[0][BaseTick % CLIENT_PREDICTION_TICS],
+		g_PositionBase[1][BaseTick % CLIENT_PREDICTION_TICS],
+		g_PositionBase[2][BaseTick % CLIENT_PREDICTION_TICS] );
 
 	// Set the player's velocity as told to him by the server.
-	pPlayer->mo->velx = pPlayer->ServerXYZVel[0];
-	pPlayer->mo->vely = pPlayer->ServerXYZVel[1];
-	pPlayer->mo->velz = pPlayer->ServerXYZVel[2];
+	pPlayer->mo->velx = g_VelocityBase[0][BaseTick % CLIENT_PREDICTION_TICS];
+	pPlayer->mo->vely = g_VelocityBase[1][BaseTick % CLIENT_PREDICTION_TICS];
+	pPlayer->mo->velz = g_VelocityBase[2][BaseTick % CLIENT_PREDICTION_TICS];
+
+	// Set the player's jumptics as told to him by the server.
+	pPlayer->jumpTics = g_JumpTicsBase[BaseTick % CLIENT_PREDICTION_TICS];
 
 	// If we don't want to do any prediction, just tick the player and get out.
 	if ( cl_predict_players == false )
@@ -253,13 +292,10 @@ void CLIENT_PREDICT_PlayerPredict( void )
 	// [BB] Due to recent ZDoom changes (ported in revision 2029), we need to save the old buttons.
 	pPlayer->oldbuttons = pPlayer->cmd.ucmd.buttons;
 	pPlayer->mo->Tick( );
-}
 
-//*****************************************************************************
-//
-void CLIENT_PREDICT_SaveCmd( void )
-{
-	memcpy( &g_SavedTiccmd[gametic % CLIENT_PREDICTION_TICS], &players[consoleplayer].cmd, sizeof( ticcmd_t ));
+	// Save our predictions, we may need to re-use them later.
+	if ( BaseTick != g_ulGameTick && ulPredictionTicks + 1 != CLIENT_PREDICTION_TICS )
+		client_predict_SavePrediction( pPlayer, g_ulGameTick );
 }
 
 //*****************************************************************************
@@ -315,6 +351,21 @@ static void client_predict_SaveOnGroundStatus( const player_t *pPlayer, const UL
 
 	// [BB] Remember whether the player was standing on another actor.
 	g_bSavedOnMobj[Tick % CLIENT_PREDICTION_TICS] = !!(pPlayer->mo->flags2 & MF2_ONMOBJ);
+	// The "onground" status is not necessarily the same as g_bSavedOnFloor.
+	g_bSavedOnGround[Tick % CLIENT_PREDICTION_TICS] = pPlayer->onground;
+}
+
+//*****************************************************************************
+//
+static void client_predict_SavePrediction( const player_t *pPlayer, const unsigned int Tick )
+{
+	g_PositionBase[0][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->x;
+	g_PositionBase[1][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->y;
+	g_PositionBase[2][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->z;
+	g_VelocityBase[0][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->velx;
+	g_VelocityBase[1][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->vely;
+	g_VelocityBase[2][Tick % CLIENT_PREDICTION_TICS] = pPlayer->mo->velz;
+	g_JumpTicsBase[Tick % CLIENT_PREDICTION_TICS] = pPlayer->jumpTics;
 }
 
 //*****************************************************************************
@@ -324,7 +375,6 @@ static void client_predict_BeginPrediction( player_t *pPlayer )
 	g_SavedAngle[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->angle;
 	g_SavedPitch[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->pitch;
 	g_SavedCrouchfactor[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->crouchfactor;
-	g_lSavedJumpTicks[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->jumpTics;
 	g_SavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->turnticks;
 	g_lSavedReactionTime[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->reactiontime;
 	g_lSavedWaterLevel[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->waterlevel;
@@ -358,7 +408,7 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		pPlayer->mo->flags2 |= MF2_ONMOBJ;
 	else
 		pPlayer->mo->flags2 &= ~MF2_ONMOBJ;
-	pPlayer->onground = g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS];
+	pPlayer->onground = g_bSavedOnGround[lTick % CLIENT_PREDICTION_TICS];
 	if ( g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS] )
 		pPlayer->mo->z = client_predict_GetPredictedFloorZ ( pPlayer, lTick );
 
@@ -373,13 +423,13 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		// [BB] Crouch prediction seems to be very tricky. While predicting, we don't recalculate
 		// crouchfactor, but just use the value we already calculated before.
 		pPlayer->crouchfactor = g_SavedCrouchfactor[( lTick + 1 )% CLIENT_PREDICTION_TICS];
-		pPlayer->jumpTics = g_lSavedJumpTicks[lTick % CLIENT_PREDICTION_TICS];
 		pPlayer->turnticks = g_SavedTurnTicks[lTick % CLIENT_PREDICTION_TICS];
 		pPlayer->mo->reactiontime = g_lSavedReactionTime[lTick % CLIENT_PREDICTION_TICS];
 		pPlayer->mo->waterlevel = g_lSavedWaterLevel[lTick % CLIENT_PREDICTION_TICS];
+		memcpy( &pPlayer->cmd, &g_SavedTiccmd[lTick % CLIENT_PREDICTION_TICS], sizeof( ticcmd_t ));
 
 		// Tick the player.
-		P_PlayerThink( pPlayer, &g_SavedTiccmd[lTick % CLIENT_PREDICTION_TICS] );
+		P_PlayerThink( pPlayer );
 		pPlayer->mo->Tick( );
 
 		// [BB] The effect of all DPushers needs to be manually predicted.
@@ -391,6 +441,9 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		// It is based on the latest position the server sent us, so it's more accurate than
 		// the older predicted values.
 		client_predict_SaveOnGroundStatus ( pPlayer, lTick+1 );
+
+		// Save our predictions, we may need to re-use them later.
+		client_predict_SavePrediction( pPlayer, lTick );
 
 		ulTicks--;
 		lTick++;
@@ -404,8 +457,8 @@ static void client_predict_EndPrediction( player_t *pPlayer )
 	pPlayer->mo->angle = g_SavedAngle[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->mo->pitch = g_SavedPitch[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->crouchfactor = g_SavedCrouchfactor[g_ulGameTick % CLIENT_PREDICTION_TICS];
-	pPlayer->jumpTics = g_lSavedJumpTicks[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->turnticks = g_SavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->mo->reactiontime = g_lSavedReactionTime[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->mo->waterlevel = g_lSavedWaterLevel[g_ulGameTick % CLIENT_PREDICTION_TICS];
+	memcpy( &pPlayer->cmd, &g_SavedTiccmd[g_ulGameTick % CLIENT_PREDICTION_TICS], sizeof( ticcmd_t ));
 }

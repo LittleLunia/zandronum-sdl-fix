@@ -194,7 +194,7 @@ void NetCommand::addFloat ( const float FloatValue )
 //
 void NetCommand::addBit( const bool value )
 {
-	NETWORK_WriteBit( &_buffer.ByteStream, value );
+	_buffer.ByteStream.WriteBit( value );
 	_buffer.ulCurrentSize = _buffer.CalcSize();
 }
 
@@ -202,7 +202,7 @@ void NetCommand::addBit( const bool value )
 //
 void NetCommand::addVariable( const int value )
 {
-	NETWORK_WriteVariable( &_buffer.ByteStream, value );
+	_buffer.ByteStream.WriteVariable( value );
 	_buffer.ulCurrentSize = _buffer.CalcSize();
 }
 
@@ -211,7 +211,7 @@ void NetCommand::addVariable( const int value )
 //
 void NetCommand::addShortByte ( int value, int bits )
 {
-	NETWORK_WriteShortByte( &_buffer.ByteStream, value, bits );
+	_buffer.ByteStream.WriteShortByte( value, bits );
 	_buffer.ulCurrentSize = _buffer.CalcSize();
 }
 

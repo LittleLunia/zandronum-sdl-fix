@@ -487,7 +487,7 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 		catch ( CRecoverableError& e )
 		{
 			// [TP] Might as well warn the user now that we're here.
-			Printf( "NETWORK_Construct: \\cGWARNING: Cannot open map %s: %s\n",
+			Printf( "NETWORK_Construct: " TEXTCOLOR_RED "WARNING: Cannot open map %s: %s\n",
 				info.mapname, e.GetMessage() );
 		}
 
@@ -525,7 +525,7 @@ int NETWORK_GetPackets( void )
 {
 	LONG				lNumBytes;
 	INT					iDecodedNumBytes = sizeof(g_ucHuffmanBuffer);
-	struct sockaddr_in	SocketFrom;
+	sockaddr			SocketFrom;
 	INT					iSocketFromLength;
 
 	iSocketFromLength = sizeof( SocketFrom );
@@ -535,9 +535,9 @@ int NETWORK_GetPackets( void )
 		return ( 0 );
 
 #ifdef	WIN32
-	lNumBytes = recvfrom( g_NetworkSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, (struct sockaddr *)&SocketFrom, &iSocketFromLength );
+	lNumBytes = recvfrom( g_NetworkSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, &SocketFrom, &iSocketFromLength );
 #else
-	lNumBytes = recvfrom( g_NetworkSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, (struct sockaddr *)&SocketFrom, (socklen_t *)&iSocketFromLength );
+	lNumBytes = recvfrom( g_NetworkSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, &SocketFrom, (socklen_t *)&iSocketFromLength );
 #endif
 
 	// If the number of bytes returned is -1, an error has occured.
@@ -620,15 +620,15 @@ int NETWORK_GetLANPackets( void )
 
 	LONG				lNumBytes;
 	INT					iDecodedNumBytes = sizeof(g_ucHuffmanBuffer);
-	struct sockaddr_in	SocketFrom;
+	sockaddr			SocketFrom;
 	INT					iSocketFromLength;
 
     iSocketFromLength = sizeof( SocketFrom );
 
 #ifdef	WIN32
-	lNumBytes = recvfrom( g_LANSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, (struct sockaddr *)&SocketFrom, &iSocketFromLength );
+	lNumBytes = recvfrom( g_LANSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, &SocketFrom, &iSocketFromLength );
 #else
-	lNumBytes = recvfrom( g_LANSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, (struct sockaddr *)&SocketFrom, (socklen_t *)&iSocketFromLength );
+	lNumBytes = recvfrom( g_LANSocket, (char *)g_ucHuffmanBuffer, sizeof( g_ucHuffmanBuffer ), 0, &SocketFrom, (socklen_t *)&iSocketFromLength );
 #endif
 
 	// If the number of bytes returned is -1, an error has occured.
@@ -720,7 +720,8 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 		return;
 
 	// Convert the IP address to a socket address.
-	struct sockaddr_in SocketAddress = Address.ToSocketAddress();
+	struct sockaddr_in SocketAddress;
+	Address.ToSocketAddress( reinterpret_cast<sockaddr&>(SocketAddress) );
 
 	// [BB] Communication with the auth server is not Huffman-encoded.
 	if ( Address.Compare( NETWORK_AUTH_GetCachedServerAddress() ) == false )
@@ -733,7 +734,7 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 		iNumBytesOut = pBuffer->ulCurrentSize;
 	}
 
-	lNumBytes = sendto( g_NetworkSocket, (const char*)g_ucHuffmanBuffer, iNumBytesOut, 0, (struct sockaddr *)&SocketAddress, sizeof( SocketAddress ));
+	lNumBytes = sendto( g_NetworkSocket, (const char*)g_ucHuffmanBuffer, iNumBytesOut, 0, reinterpret_cast<sockaddr*>(&SocketAddress), sizeof( SocketAddress ));
 
 	// If sendto returns -1, there was an error.
 	if ( lNumBytes == -1 )
@@ -992,21 +993,6 @@ void NETWORK_AddLumpForAuthentication( const LONG LumpNumber )
 
 //*****************************************************************************
 //
-void NETWORK_GenerateMapLumpMD5Hash( MapData *Map, const LONG LumpNumber, FString &MD5Hash )
-{
-	LONG lLumpSize = Map->Size( LumpNumber );
-	BYTE *pbData = new BYTE[lLumpSize];
-
-	// Dump the data from the lump into our data buffer.
-	Map->Read( LumpNumber, pbData );
-
-	// Perform the checksum on our buffer, and free it.
-	CMD5Checksum::GetMD5( pbData, lLumpSize, MD5Hash );
-	delete[] pbData;
-}
-
-//*****************************************************************************
-//
 void NETWORK_GenerateLumpMD5Hash( const int LumpNum, FString &MD5Hash )
 {
 	const int lumpSize = Wads.LumpLength (LumpNum);
@@ -1156,10 +1142,10 @@ int NETWORK_ACSScriptToNetID( int script )
 //
 FName NETWORK_ReadName( BYTESTREAM_s* bytestream )
 {
-	SDWORD index = NETWORK_ReadShort( bytestream );
+	SDWORD index = bytestream->ReadShort();
 
 	if ( index == -1 )
-		return FName( NETWORK_ReadString( bytestream ));
+		return FName( bytestream->ReadString());
 	else
 		return FName( static_cast<ENamedName>( index ));
 }
@@ -1173,12 +1159,12 @@ void NETWORK_WriteName( BYTESTREAM_s* bytestream, FName name )
 	// So, use this if most of the time the name is predefined.
 	if ( name.IsPredefined() )
 	{
-		NETWORK_WriteShort( bytestream, name );
+		bytestream->WriteShort( name );
 	}
 	else
 	{
-		NETWORK_WriteShort( bytestream, -1 );
-		NETWORK_WriteString( bytestream, name );
+		bytestream->WriteShort( -1 );
+		bytestream->WriteString( name );
 	}
 }
 
@@ -1441,7 +1427,7 @@ static void network_InitPWADList( void )
 
 void network_Error( const char *pszError )
 {
-	Printf( "\\cd%s\n", pszError );
+	Printf( TEXTCOLOR_GREEN "%s\n", pszError );
 }
 
 //*****************************************************************************
@@ -1607,7 +1593,7 @@ void NETWORK_FillBufferWithShit( BYTESTREAM_s *pByteStream, ULONG ulSize )
 	ULONG	ulIdx;
 
 	for ( ulIdx = 0; ulIdx < ulSize; ulIdx++ )
-		NETWORK_WriteByte( pByteStream, M_Random( ));
+		pByteStream->WriteByte( M_Random( ));
 
 //	g_NetworkMessage.Clear();
 }
@@ -1616,15 +1602,6 @@ CCMD( fillbufferwithshit )
 {
 	// Fill the packet with 1k of SHIT!
 	NETWORK_FillBufferWithShit( &g_NetworkMessage.ByteStream, 1024 );
-/*
-	ULONG	ulIdx;
-
-	// Fill the packet with 1k of SHIT!
-	for ( ulIdx = 0; ulIdx < 1024; ulIdx++ )
-		NETWORK_WriteByte( &g_NetworkMessage, M_Random( ));
-
-//	g_NetworkMessage.Clear();
-*/
 }
 
 CCMD( testnetstring )
